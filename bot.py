@@ -53,7 +53,7 @@ CONFIG = {
 def print_wallets(wallets):
     print(Fore.LIGHTCYAN_EX + "\nСписок кошельков:")
     for i, w in enumerate(wallets, 1):
-        print(f"  {i}. {w['address']} (создан: {w.get('created_at', 'n/a')})")
+        print(f"  {i}. {w['address']} (proxy: {w.get('proxy', '-')}) (создан: {w.get('created_at', 'n/a')})")
     if not wallets:
         print(Fore.YELLOW + "Кошельки отсутствуют.")
 
@@ -71,27 +71,10 @@ def save_wallets(wallets, file_path):
     try:
         pathlib.Path(os.path.dirname(file_path) or ".").mkdir(parents=True, exist_ok=True)
         with open(file_path, "w") as f:
-            json.dump(wallets, f, indent=2)
+            json.dump(wallets, f, indent=2, ensure_ascii=False)
         print(Fore.GREEN + f"Сохранено {len(wallets)} кошельков.")
     except Exception as e:
         print(Fore.RED + f"Ошибка сохранения: {e}")
-
-def generate_wallet():
-    acc = Account.create()
-    return {
-        "private_key": acc.key.hex(),
-        "address": acc.address.lower(),
-        "created_at": time.strftime('%Y-%m-%d %H:%M:%S')
-    }
-
-def remove_wallet(wallets, idx):
-    try:
-        w = wallets.pop(idx)
-        print(Fore.GREEN + f"Удалён: {w['address']}")
-        return wallets
-    except IndexError:
-        print(Fore.RED + "Некорректный номер.")
-        return wallets
 
 def load_proxies():
     proxies = []
@@ -99,25 +82,6 @@ def load_proxies():
         with open(CONFIG["PROXIES_FILE"], "r") as f:
             proxies = [line.strip() for line in f if line.strip()]
     return proxies
-
-def assign_proxies(wallets, proxies):
-    # Для каждого кошелька назначаем свой прокси (циклически, если прокси мало)
-    if not proxies:
-        return [None] * len(wallets)
-    return [proxies[i % len(proxies)] for i in range(len(wallets))]
-
-def input_proxy():
-    print(Fore.LIGHTCYAN_EX + "\nДобавьте ваши прокси в файл proxies.txt (по одному на строку):")
-    print("  user:pass@host:port или host:port")
-    input(Fore.LIGHTYELLOW_EX + "Нажмите Enter после добавления прокси в файл..." + Style.RESET_ALL)
-
-def input_referral():
-    ref = input("Введите реферальный код (или оставьте пустым): ").strip()
-    if ref:
-        print(Fore.GREEN + f"Реферальный код: {ref}")
-    else:
-        print(Fore.YELLOW + "Без реферального кода")
-    return ref
 
 def random_range_input(prompt, default_min=3, default_max=12):
     print(Fore.LIGHTCYAN_EX + prompt + f" (по умолчанию {default_min}-{default_max})")
@@ -135,12 +99,56 @@ def random_range_input(prompt, default_min=3, default_max=12):
     print(Fore.GREEN + f"Будет создано {count} кошельков.")
     return count
 
+def assign_proxies(wallets, proxies):
+    """Назначает прокси только новым кошелькам, уже имеющим — не меняет."""
+    used_proxies = set(w.get('proxy') for w in wallets if w.get('proxy'))
+    proxies_cycle = [p for p in proxies if p not in used_proxies] or proxies
+    j = 0
+    for w in wallets:
+        if not w.get('proxy'):
+            w['proxy'] = proxies_cycle[j % len(proxies_cycle)] if proxies_cycle else None
+            j += 1
+    return wallets
+
+def input_proxy():
+    print(Fore.LIGHTCYAN_EX + "\nДобавьте ваши прокси в файл proxies.txt (по одному на строку):")
+    print("  user:pass@host:port или host:port")
+    input(Fore.LIGHTYELLOW_EX + "Нажмите Enter после добавления прокси в файл..." + Style.RESET_ALL)
+
+def input_referral():
+    ref = input("Введите реферальный код (или оставьте пустым): ").strip()
+    if ref:
+        print(Fore.GREEN + f"Реферальный код: {ref}")
+    else:
+        print(Fore.YELLOW + "Без реферального кода")
+    return ref
+
+def generate_wallet(proxy=None):
+    acc = Account.create()
+    return {
+        "private_key": acc.key.hex(),
+        "address": acc.address.lower(),
+        "proxy": proxy,
+        "created_at": time.strftime('%Y-%m-%d %H:%M:%S'),
+        "last_used": None
+    }
+
+def remove_wallet(wallets, idx):
+    try:
+        w = wallets.pop(idx)
+        print(Fore.GREEN + f"Удалён: {w['address']}")
+        return wallets
+    except IndexError:
+        print(Fore.RED + "Некорректный номер.")
+        return wallets
+
 class PrdtBot:
-    def __init__(self, wallet, proxy=None, referral_code=""):
+    def __init__(self, wallet, referral_code=""):
         self.web3 = Web3()
         self.wallet = wallet
         self.referral_code = referral_code
         self.session = requests.Session()
+        proxy = self.wallet.get('proxy')
         if proxy:
             self.session.proxies = {'http': f'http://{proxy}', 'https': f'http://{proxy}'}
         self.session.headers.update(CONFIG["HEADERS"])
@@ -173,7 +181,7 @@ class PrdtBot:
             if verify_resp.status_code != 200:
                 print(Fore.RED + f"Ошибка верификации: {verify_resp.text}")
                 return False
-            print(Fore.GREEN + f"Авторизация {self.wallet['address']} успешна!")
+            print(Fore.GREEN + f"Авторизация {self.wallet['address']} (proxy: {self.wallet.get('proxy')}) успешна!")
             return True
         except Exception as e:
             print(Fore.RED + f"Ошибка авторизации: {e}")
@@ -224,10 +232,13 @@ def main():
         choice = input(Fore.YELLOW + "Выберите действие: " + Style.RESET_ALL).strip()
         if choice == "1":
             count = random_range_input("Введите диапазон для генерации количества кошельков")
-            for _ in range(count):
-                w = generate_wallet()
+            proxies = load_proxies()
+            # Назначаем прокси для новых кошельков
+            for i in range(count):
+                proxy = proxies[(len(wallets)+i) % len(proxies)] if proxies else None
+                w = generate_wallet(proxy=proxy)
                 wallets.append(w)
-                print(Fore.GREEN + f"Создан: {w['address']}")
+                print(Fore.GREEN + f"Создан: {w['address']} (proxy: {w['proxy']})")
             save_wallets(wallets, CONFIG["WALLETS_FILE"])
 
         elif choice == "2":
@@ -240,13 +251,12 @@ def main():
             ref = input_referral()
             input_proxy()
             proxies = load_proxies()
-            if not proxies:
-                print(Fore.RED + "В proxies.txt нет прокси!")
-                continue
-            assigned = assign_proxies(wallets, proxies)
-            for i, (w, proxy) in enumerate(zip(wallets, assigned), 1):
+            wallets = assign_proxies(wallets, proxies)
+            save_wallets(wallets, CONFIG["WALLETS_FILE"])
+            for i, w in enumerate(wallets, 1):
                 print(Fore.LIGHTCYAN_EX + f"\n--- [{i}/{len(wallets)}] ---")
-                bot = PrdtBot(w, proxy=proxy, referral_code=ref)
+                print(Fore.LIGHTCYAN_EX + f"Кошелек: {w['address']} | Прокси: {w.get('proxy')}")
+                bot = PrdtBot(w, referral_code=ref)
                 if bot.login():
                     time.sleep(1)
                     bot.start_mining()
@@ -260,13 +270,12 @@ def main():
                 continue
             input_proxy()
             proxies = load_proxies()
-            if not proxies:
-                print(Fore.RED + "В proxies.txt нет прокси!")
-                continue
-            assigned = assign_proxies(wallets, proxies)
-            for i, (w, proxy) in enumerate(zip(wallets, assigned), 1):
+            wallets = assign_proxies(wallets, proxies)
+            save_wallets(wallets, CONFIG["WALLETS_FILE"])
+            for i, w in enumerate(wallets, 1):
                 print(Fore.LIGHTCYAN_EX + f"\n--- [{i}/{len(wallets)}] ---")
-                bot = PrdtBot(w, proxy=proxy)
+                print(Fore.LIGHTCYAN_EX + f"Кошелек: {w['address']} | Прокси: {w.get('proxy')}")
+                bot = PrdtBot(w)
                 if bot.login():
                     time.sleep(1)
                     bot.checkin()
