@@ -1,5 +1,5 @@
 from colorama import Fore, Style, init
-import requests, json, time, os, pathlib, random, sys
+import requests, json, time, os, pathlib, random, sys, datetime
 from web3 import Web3
 from eth_account.messages import encode_defunct
 from eth_account import Account
@@ -26,34 +26,140 @@ header = f"""{Fore.LIGHTYELLOW_EX}Все приватные ключи хран�
 Никогда не используйте здесь основные кошельки или кошельки с активами!{Style.RESET_ALL}
 """
 
-menu = f"""{Fore.LIGHTCYAN_EX}
-  1. Генерировать новые кошельки
-  2. Посмотреть все кошельки
-  3. Запустить фарминг для всех кошельков
-  4. Сделать check-in
-  5. Настроить прокси
-  6. Удалить кошелек
-  7. Выйти
-"""
+def clear_screen():
+    os.system('cls' if os.name == 'nt' else 'clear')
 
-CONFIG = {
-    "AUTH_URL": "https://api.prdt.finance",
-    "TOKEN_URL": "https://tokenapi.prdt.finance",
-    "WALLETS_FILE": "all_wallets.json",
-    "PROXIES_FILE": "proxies.txt",
-    "HEADERS": {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/plain, */*",
-        "Origin": "https://prdt.finance",
-        "Referer": "https://prdt.finance/"
-    },
-    "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+SETTINGS_FILE = "prdt_settings.json"
+DEFAULT_SETTINGS = {
+    "cooldown_hours": 8,
+    "gen_range_min": 3,
+    "gen_range_max": 12,
+    "referral_code": "",
+    "wallets_file": "all_wallets.json",
+    "proxies_file": "proxies.txt",
+    "delay_min": 5,
+    "delay_max": 15
 }
+
+def load_settings():
+    if not os.path.exists(SETTINGS_FILE):
+        save_settings(DEFAULT_SETTINGS)
+    try:
+        with open(SETTINGS_FILE, "r") as f:
+            s = json.load(f)
+        for k, v in DEFAULT_SETTINGS.items():
+            if k not in s:
+                s[k] = v
+        return s
+    except Exception:
+        save_settings(DEFAULT_SETTINGS)
+        return DEFAULT_SETTINGS.copy()
+
+def save_settings(settings):
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(settings, f, indent=2, ensure_ascii=False)
+
+def show_settings(settings, pause=True):
+    print(Fore.LIGHTCYAN_EX + "\nТекущие настройки:")
+    print(f"  1. Время отдыха между фармингом (часов): {settings['cooldown_hours']}")
+    print(f"  2. Диапазон генерации кошельков: {settings['gen_range_min']} - {settings['gen_range_max']}")
+    print(f"  3. Реферальный код: {settings['referral_code'] or '[не задан]'}")
+    print(f"  4. Путь к файлу кошельков: {settings['wallets_file']}")
+    print(f"  5. Путь к файлу прокси: {settings['proxies_file']}")
+    print(f"  6. Задержка между аккаунтами: {settings['delay_min']}–{settings['delay_max']} сек.")
+    if pause:
+        input(Fore.YELLOW + "\nНажмите Enter для возврата в главное меню...")
+
+def edit_settings(settings):
+    while True:
+        show_settings(settings, pause=False)
+        print("  7. Сбросить настройки к стандартным")
+        print("  8. Назад в меню")
+        c = input(Fore.YELLOW + "\nВведите номер настройки для изменения (или 8 для выхода): ").strip()
+        if c == "1":
+            h = input("Введите время отдыха в часах (например, 8): ").strip()
+            try:
+                h = int(h)
+                if h < 1 or h > 72:
+                    print(Fore.RED + "Недопустимое значение. Диапазон 1-72.")
+                else:
+                    settings["cooldown_hours"] = h
+            except ValueError:
+                print(Fore.RED + "Ошибка ввода.")
+        elif c == "2":
+            mi = input("Минимум (например, 3): ").strip()
+            ma = input("Максимум (например, 12): ").strip()
+            try:
+                mi, ma = int(mi), int(ma)
+                if mi < 1 or ma < mi:
+                    print(Fore.RED + "Ошибка диапазона.")
+                else:
+                    settings["gen_range_min"] = mi
+                    settings["gen_range_max"] = ma
+            except ValueError:
+                print(Fore.RED + "Ошибка ввода.")
+        elif c == "3":
+            ref = input("Введите новый реферальный код (или оставьте пустым): ").strip()
+            settings["referral_code"] = ref
+        elif c == "4":
+            path = input("Введите путь до файла с кошельками: ").strip()
+            if path:
+                settings["wallets_file"] = path
+        elif c == "5":
+            path = input("Введите путь до файла с прокси: ").strip()
+            if path:
+                settings["proxies_file"] = path
+        elif c == "6":
+            mi = input("Минимум задержки (сек): ").strip()
+            ma = input("Максимум задержки (сек): ").strip()
+            try:
+                mi, ma = int(mi), int(ma)
+                if mi < 0 or ma < mi:
+                    print(Fore.RED + "Ошибка диапазона.")
+                else:
+                    settings["delay_min"] = mi
+                    settings["delay_max"] = ma
+            except ValueError:
+                print(Fore.RED + "Ошибка ввода.")
+        elif c == "7":
+            confirm = input(Fore.RED + "Сбросить все настройки к дефолтным? (y/n): ").strip().lower()
+            if confirm == "y":
+                for k in DEFAULT_SETTINGS:
+                    settings[k] = DEFAULT_SETTINGS[k]
+        elif c == "8":
+            break
+        else:
+            print(Fore.YELLOW + "Некорректный ввод.")
+        save_settings(settings)
+
+def now_iso():
+    return datetime.datetime.now().isoformat(timespec='seconds')
+
+def hours_ahead(hours):
+    return (datetime.datetime.now() + datetime.timedelta(hours=hours)).isoformat(timespec='seconds')
+
+def is_cooldown(wallet):
+    next_check = wallet.get('next_check')
+    if not next_check:
+        return False
+    try:
+        return datetime.datetime.fromisoformat(next_check) > datetime.datetime.now()
+    except Exception:
+        return False
 
 def print_wallets(wallets):
     print(Fore.LIGHTCYAN_EX + "\nСписок кошельков:")
     for i, w in enumerate(wallets, 1):
-        print(f"  {i}. {w['address']} (proxy: {w.get('proxy', '-')}) (создан: {w.get('created_at', 'n/a')})")
+        nc = w.get('next_check')
+        cooldown_msg = ""
+        if nc:
+            try:
+                rest = (datetime.datetime.fromisoformat(nc) - datetime.datetime.now()).total_seconds()
+                if rest > 0:
+                    cooldown_msg = f" [отдых до {nc}]"
+            except Exception:
+                pass
+        print(f"  {i}. {w['address']} (proxy: {w.get('proxy', '-')}) (создан: {w.get('created_at', 'n/a')}){cooldown_msg}")
     if not wallets:
         print(Fore.YELLOW + "Кошельки отсутствуют.")
 
@@ -76,31 +182,14 @@ def save_wallets(wallets, file_path):
     except Exception as e:
         print(Fore.RED + f"Ошибка сохранения: {e}")
 
-def load_proxies():
+def load_proxies(proxies_file):
     proxies = []
-    if os.path.exists(CONFIG["PROXIES_FILE"]):
-        with open(CONFIG["PROXIES_FILE"], "r") as f:
+    if os.path.exists(proxies_file):
+        with open(proxies_file, "r") as f:
             proxies = [line.strip() for line in f if line.strip()]
     return proxies
 
-def random_range_input(prompt, default_min=3, default_max=12):
-    print(Fore.LIGHTCYAN_EX + prompt + f" (по умолчанию {default_min}-{default_max})")
-    min_n = input(f"  Минимум: [{default_min}] ").strip()
-    max_n = input(f"  Максимум: [{default_max}] ").strip()
-    try:
-        min_v = int(min_n) if min_n else default_min
-        max_v = int(max_n) if max_n else default_max
-        if min_v > max_v or min_v < 1:
-            print(Fore.RED + "Некорректный диапазон! Используется по умолчанию.")
-            min_v, max_v = default_min, default_max
-    except Exception:
-        min_v, max_v = default_min, default_max
-    count = random.randint(min_v, max_v)
-    print(Fore.GREEN + f"Будет создано {count} кошельков.")
-    return count
-
 def assign_proxies(wallets, proxies):
-    """Назначает прокси только новым кошелькам, уже имеющим — не меняет."""
     used_proxies = set(w.get('proxy') for w in wallets if w.get('proxy'))
     proxies_cycle = [p for p in proxies if p not in used_proxies] or proxies
     j = 0
@@ -115,14 +204,6 @@ def input_proxy():
     print("  user:pass@host:port или host:port")
     input(Fore.LIGHTYELLOW_EX + "Нажмите Enter после добавления прокси в файл..." + Style.RESET_ALL)
 
-def input_referral():
-    ref = input("Введите реферальный код (или оставьте пустым): ").strip()
-    if ref:
-        print(Fore.GREEN + f"Реферальный код: {ref}")
-    else:
-        print(Fore.YELLOW + "Без реферального кода")
-    return ref
-
 def generate_wallet(proxy=None):
     acc = Account.create()
     return {
@@ -130,7 +211,8 @@ def generate_wallet(proxy=None):
         "address": acc.address.lower(),
         "proxy": proxy,
         "created_at": time.strftime('%Y-%m-%d %H:%M:%S'),
-        "last_used": None
+        "last_used": None,
+        "next_check": None
     }
 
 def remove_wallet(wallets, idx):
@@ -141,6 +223,18 @@ def remove_wallet(wallets, idx):
     except IndexError:
         print(Fore.RED + "Некорректный номер.")
         return wallets
+
+CONFIG = {
+    "AUTH_URL": "https://api.prdt.finance",
+    "TOKEN_URL": "https://tokenapi.prdt.finance",
+    "HEADERS": {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://prdt.finance",
+        "Referer": "https://prdt.finance/"
+    },
+    "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+}
 
 class PrdtBot:
     def __init__(self, wallet, referral_code=""):
@@ -161,7 +255,7 @@ class PrdtBot:
             "network": "evm"
         }
         try:
-            resp = self.session.post(f"{CONFIG['AUTH_URL']}/auth/request-message", json=payload)
+            resp = self.session.post(f"{CONFIG['AUTH_URL']}/auth/request-message", json=payload, timeout=15)
             if resp.status_code != 200:
                 print(Fore.RED + f"Ошибка получения сообщения: {resp.text}")
                 return False
@@ -177,7 +271,7 @@ class PrdtBot:
                 "address": self.wallet['address']
             }
             time.sleep(1)
-            verify_resp = self.session.post(f"{CONFIG['AUTH_URL']}/auth/verify", json=verify_payload)
+            verify_resp = self.session.post(f"{CONFIG['AUTH_URL']}/auth/verify", json=verify_payload, timeout=15)
             if verify_resp.status_code != 200:
                 print(Fore.RED + f"Ошибка верификации: {verify_resp.text}")
                 return False
@@ -189,57 +283,93 @@ class PrdtBot:
 
     def start_mining(self):
         try:
-            st = self.session.get(f"{CONFIG['TOKEN_URL']}/api/v1/mine/status")
+            st = self.session.get(f"{CONFIG['TOKEN_URL']}/api/v1/mine/status", timeout=15)
             if st.status_code == 200:
                 data = st.json()
                 if data.get('success') and data.get('user', {}).get('miningActive', False):
                     print(Fore.GREEN + f"Майнинг уже запущен для {self.wallet['address']}. Rate: {data.get('user', {}).get('miningRate', 0)}")
-                    return True
+                    return "already"
             p = {"referralCode": self.referral_code}
-            r = self.session.post(f"{CONFIG['TOKEN_URL']}/api/v1/mine/start", json=p)
+            r = self.session.post(f"{CONFIG['TOKEN_URL']}/api/v1/mine/start", json=p, timeout=15)
             if r.status_code == 200:
                 rs = r.json()
                 print(Fore.GREEN + f"Майнинг запущен для {self.wallet['address']}: {rs.get('message')}")
-                return True
+                return "started"
             else:
-                print(Fore.RED + f"Ошибка запуска майнинга: {r.text}")
-                return False
+                # Главное изменение:
+                try:
+                    rs = r.json()
+                    msg = rs.get("message", "")
+                    if "already in progress" in msg.lower():
+                        print(Fore.YELLOW + f"Майнинг уже запущен для {self.wallet['address']} (ответ: {msg})")
+                        return "already"
+                except Exception:
+                    msg = r.text
+                print(Fore.RED + f"Ошибка запуска майнинга: {msg}")
+                return "fail"
         except Exception as e:
             print(Fore.RED + f"Ошибка майнинга: {e}")
-            return False
+            return "fail"
+
 
     def checkin(self):
         try:
-            r = self.session.post(f"{CONFIG['TOKEN_URL']}/api/v1/mine/checkin", json={})
+            r = self.session.post(f"{CONFIG['TOKEN_URL']}/api/v1/mine/checkin", json={}, timeout=15)
             if r.status_code != 200:
                 print(Fore.RED + f"Ошибка check-in: {r.text}")
-                return False
+                return "fail"
             rs = r.json()
             print(Fore.GREEN + f"Check-in для {self.wallet['address']}: {rs.get('message')}")
-            return True
+            return "success"
         except Exception as e:
             print(Fore.RED + f"Ошибка check-in: {e}")
-            return False
+            return "fail"
 
 def main():
+    settings = load_settings()
+    clear_screen()
     print(banner)
     print(warn)
     print(header)
-    wallets = load_wallets(CONFIG["WALLETS_FILE"])
+    wallets = load_wallets(settings["wallets_file"])
 
     while True:
-        print(menu)
+        print(Fore.LIGHTCYAN_EX + f"""
+  1. Генерировать новые кошельки
+  2. Посмотреть все кошельки
+  3. Запустить фарминг для всех кошельков
+  4. Сделать check-in
+  5. Настроить прокси
+  6. Удалить кошелек
+  7. Настройки программы
+  8. Выйти
+  9. Просмотреть текущие настройки
+""")
         choice = input(Fore.YELLOW + "Выберите действие: " + Style.RESET_ALL).strip()
+
         if choice == "1":
-            count = random_range_input("Введите диапазон для генерации количества кошельков")
-            proxies = load_proxies()
-            # Назначаем прокси для новых кошельков
+            print(Fore.LIGHTCYAN_EX + "Введите диапазон для генерации количества кошельков:")
+            min_def = settings["gen_range_min"]
+            max_def = settings["gen_range_max"]
+            min_n = input(f"  Минимум: [{min_def}] ").strip()
+            max_n = input(f"  Максимум: [{max_def}] ").strip()
+            try:
+                min_v = int(min_n) if min_n else min_def
+                max_v = int(max_n) if max_n else max_def
+                if min_v > max_v or min_v < 1:
+                    print(Fore.RED + "Некорректный диапазон! Используется по умолчанию.")
+                    min_v, max_v = min_def, max_def
+            except Exception:
+                min_v, max_v = min_def, max_def
+            count = random.randint(min_v, max_v)
+            print(Fore.GREEN + f"Будет создано {count} кошельков.")
+            proxies = load_proxies(settings["proxies_file"])
             for i in range(count):
-                proxy = proxies[(len(wallets)+i) % len(proxies)] if proxies else None
+                proxy = proxies[(len(wallets) + i) % len(proxies)] if proxies else None
                 w = generate_wallet(proxy=proxy)
                 wallets.append(w)
                 print(Fore.GREEN + f"Создан: {w['address']} (proxy: {w['proxy']})")
-            save_wallets(wallets, CONFIG["WALLETS_FILE"])
+            save_wallets(wallets, settings["wallets_file"])
 
         elif choice == "2":
             print_wallets(wallets)
@@ -248,40 +378,64 @@ def main():
             if not wallets:
                 print(Fore.YELLOW + "Нет кошельков.")
                 continue
-            ref = input_referral()
+            ref = input(Fore.LIGHTCYAN_EX + f"Введите реферальный код (Enter — текущий: {settings['referral_code'] or '[не задан]'}): ").strip()
+            if not ref:
+                ref = settings["referral_code"]
             input_proxy()
-            proxies = load_proxies()
+            proxies = load_proxies(settings["proxies_file"])
             wallets = assign_proxies(wallets, proxies)
-            save_wallets(wallets, CONFIG["WALLETS_FILE"])
+            save_wallets(wallets, settings["wallets_file"])
             for i, w in enumerate(wallets, 1):
+                if is_cooldown(w):
+                    print(Fore.LIGHTBLACK_EX + f"\n--- [{i}/{len(wallets)}] ---")
+                    print(Fore.LIGHTBLACK_EX + f"Кошелек: {w['address']} | Прокси: {w.get('proxy')} отдыхает до {w.get('next_check')}")
+                    continue
                 print(Fore.LIGHTCYAN_EX + f"\n--- [{i}/{len(wallets)}] ---")
                 print(Fore.LIGHTCYAN_EX + f"Кошелек: {w['address']} | Прокси: {w.get('proxy')}")
                 bot = PrdtBot(w, referral_code=ref)
                 if bot.login():
                     time.sleep(1)
-                    bot.start_mining()
-                    time.sleep(random.uniform(1, 2))
+                    result = bot.start_mining()
+                    if result == "started" or result == "already":
+                        w['last_used'] = now_iso()
+                        w['next_check'] = hours_ahead(settings["cooldown_hours"])
+                    save_wallets(wallets, settings["wallets_file"])
                 else:
                     print(Fore.YELLOW + "Пропущено из-за ошибки авторизации.")
+                if i != len(wallets):
+                    d = random.uniform(settings["delay_min"], settings["delay_max"])
+                    print(Fore.LIGHTBLACK_EX + f"Задержка перед следующим аккаунтом: {d:.1f} сек.\n")
+                    time.sleep(d)
 
         elif choice == "4":
             if not wallets:
                 print(Fore.YELLOW + "Нет кошельков.")
                 continue
             input_proxy()
-            proxies = load_proxies()
+            proxies = load_proxies(settings["proxies_file"])
             wallets = assign_proxies(wallets, proxies)
-            save_wallets(wallets, CONFIG["WALLETS_FILE"])
+            save_wallets(wallets, settings["wallets_file"])
             for i, w in enumerate(wallets, 1):
+                if is_cooldown(w):
+                    print(Fore.LIGHTBLACK_EX + f"\n--- [{i}/{len(wallets)}] ---")
+                    print(Fore.LIGHTBLACK_EX + f"Кошелек: {w['address']} | Прокси: {w.get('proxy')} отдыхает до {w.get('next_check')}")
+                    continue
                 print(Fore.LIGHTCYAN_EX + f"\n--- [{i}/{len(wallets)}] ---")
                 print(Fore.LIGHTCYAN_EX + f"Кошелек: {w['address']} | Прокси: {w.get('proxy')}")
                 bot = PrdtBot(w)
                 if bot.login():
                     time.sleep(1)
-                    bot.checkin()
-                    time.sleep(random.uniform(1, 2))
+                    result = bot.checkin()
+                    if result == "success":
+                        w['last_used'] = now_iso()
+                        w['next_check'] = hours_ahead(settings["cooldown_hours"])
+                    save_wallets(wallets, settings["wallets_file"])
                 else:
                     print(Fore.YELLOW + "Пропущено из-за ошибки авторизации.")
+                if i != len(wallets):
+                    d = random.uniform(settings["delay_min"], settings["delay_max"])
+                    print(Fore.LIGHTBLACK_EX + f"Задержка перед следующим аккаунтом: {d:.1f} сек.\n")
+                    time.sleep(d)
 
         elif choice == "5":
             input_proxy()
@@ -291,15 +445,27 @@ def main():
             try:
                 idx = int(input("Номер для удаления: ")) - 1
                 wallets = remove_wallet(wallets, idx)
-                save_wallets(wallets, CONFIG["WALLETS_FILE"])
+                save_wallets(wallets, settings["wallets_file"])
             except ValueError:
                 print(Fore.RED + "Ошибка: нужен номер.")
             except Exception as e:
                 print(Fore.RED + f"Ошибка: {e}")
 
         elif choice == "7":
+            edit_settings(settings)
+            save_settings(settings)
+            wallets = load_wallets(settings["wallets_file"])
+            clear_screen()
+            print(banner)
+            print(warn)
+            print(header)
+
+        elif choice == "8":
             print(Fore.CYAN + "Пока 👋")
             break
+
+        elif choice == "9":
+            show_settings(settings)
 
         else:
             print(Fore.YELLOW + "Некорректный выбор!")
