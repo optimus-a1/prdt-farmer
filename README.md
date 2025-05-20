@@ -42,7 +42,7 @@ markdown
 ## ⚙️ 安装
 
 ```bash
-git clone https://github.com/k2wGG/prdt-farmer.git
+git clone https://github.com/optimus-a1/prdt-farmer.git
 cd prdt-farmer
 pip install -r requirements.txt
 必须使用 Python 3.8 或更高版本！
