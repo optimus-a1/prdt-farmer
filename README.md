@@ -1,5 +1,3 @@
-以下是将提供的 README.md 文件从俄文和英文翻译成中文的版本，保持了 Markdown 格式和所有内容的完整性：
-markdown
 # prdt-farmer
 
 ### PRDT 挖矿多账户管理器 by [nod3r](https://t.me/nod3r)
