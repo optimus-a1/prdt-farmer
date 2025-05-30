@@ -41,6 +41,7 @@
 
 ```bash
 git clone https://github.com/optimus-a1/prdt-farmer.git
+cd prdt-farmer
 
 
 apt update && apt install -y python3-venv
@@ -49,7 +50,7 @@ python3 -m venv venv
 
 source venv/bin/activate
 
-cd prdt-farmer
+
 
 pip install -r requirements.txt
 必须使用 Python 3.8 或更高版本！
